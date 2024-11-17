@@ -1,0 +1,286 @@
+// ==UserScript==
+// @name         Archive.org Bulk Search and Scrape Helper
+// @namespace    http://tampermonkey.net/
+// @version      0.5
+// @description  Bulk search and scrape files on archive.org with direct links
+// @author       You
+// @match        https://archive.org/download/ravana-*
+// @grant        none
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    // Create upload interface
+    function createUploadInterface() {
+        const container = document.createElement('div');
+        container.style.cssText = `
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 20px;
+            background: white;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+            z-index: 9999;
+            width: 600px;
+            max-height: 80vh;
+            overflow-y: auto;
+        `;
+
+        // Create file input
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.multiple = true;
+        input.style.marginBottom = '10px';
+        input.style.display = 'block';
+
+        // Create scrape button
+        const scrapeButton = document.createElement('button');
+        scrapeButton.textContent = 'Scrape All Links';
+        scrapeButton.style.cssText = `
+            margin-right: 10px;
+            padding: 5px 10px;
+            background: #28a745;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+        `;
+
+        // Create filter input
+        const filterInput = document.createElement('input');
+        filterInput.type = 'text';
+        filterInput.placeholder = 'Enter terms to exclude (comma-separated)';
+        filterInput.style.cssText = `
+            width: 100%;
+            padding: 5px;
+            margin: 10px 0;
+            border: 1px solid #ccc;
+            border-radius: 3px;
+        `;
+
+        // Create results counter
+        const counter = document.createElement('div');
+        counter.id = 'results-counter';
+        counter.style.cssText = `
+            margin: 10px 0;
+            font-weight: bold;
+            color: #444;
+        `;
+
+        // Create results display textarea (for display with line numbers)
+        const displayTextarea = document.createElement('textarea');
+        displayTextarea.id = 'display-textarea';
+        displayTextarea.style.cssText = `
+            width: 100%;
+            height: 300px;
+            margin-top: 10px;
+            padding: 10px;
+            font-family: monospace;
+            resize: vertical;
+            background-color: #f8f9fa;
+            color: #333;
+        `;
+        displayTextarea.readOnly = true;
+        displayTextarea.placeholder = 'Search results will appear here...';
+
+        // Hidden textarea for storing actual links (for copying)
+        const hiddenTextarea = document.createElement('textarea');
+        hiddenTextarea.id = 'hidden-textarea';
+        hiddenTextarea.style.display = 'none';
+
+        // Create copy button
+        const copyButton = document.createElement('button');
+        copyButton.textContent = 'Copy All Links';
+        copyButton.style.cssText = `
+            margin-top: 10px;
+            padding: 5px 10px;
+            background: #0066cc;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+        `;
+
+        // Create button container
+        const buttonContainer = document.createElement('div');
+        buttonContainer.style.display = 'flex';
+        buttonContainer.appendChild(scrapeButton);
+        buttonContainer.appendChild(copyButton);
+
+        // Add elements to container
+        container.appendChild(input);
+        container.appendChild(buttonContainer);
+        container.appendChild(filterInput);
+        container.appendChild(counter);
+        container.appendChild(displayTextarea);
+        container.appendChild(hiddenTextarea);
+        document.body.appendChild(container);
+
+        // Add event listeners
+        input.addEventListener('change', handleFileUpload);
+
+        // Fixed copy functionality
+        copyButton.addEventListener('click', () => {
+            const hiddenTextarea = document.getElementById('hidden-textarea');
+            // Temporarily make the hidden textarea visible but out of view
+            hiddenTextarea.style.display = 'block';
+            hiddenTextarea.style.position = 'fixed';
+            hiddenTextarea.style.top = '-9999px';
+
+            // Select and copy
+            hiddenTextarea.select();
+            try {
+                // Try the new clipboard API first
+                navigator.clipboard.writeText(hiddenTextarea.value).then(() => {
+                    copyButton.textContent = 'Copied!';
+                    setTimeout(() => {
+                        copyButton.textContent = 'Copy All Links';
+                    }, 2000);
+                }).catch(() => {
+                    // Fallback to execCommand
+                    document.execCommand('copy');
+                    copyButton.textContent = 'Copied!';
+                    setTimeout(() => {
+                        copyButton.textContent = 'Copy All Links';
+                    }, 2000);
+                });
+            } catch (err) {
+                console.error('Failed to copy:', err);
+                copyButton.textContent = 'Copy Failed!';
+                setTimeout(() => {
+                    copyButton.textContent = 'Copy All Links';
+                }, 2000);
+            }
+
+            // Hide the textarea again
+            hiddenTextarea.style.display = 'none';
+        });
+
+        scrapeButton.addEventListener('click', () => {
+            const excludeTerms = filterInput.value
+                .split(',')
+                .map(term => term.trim().toLowerCase())
+                .filter(term => term.length > 0);
+            scrapeAllLinks(excludeTerms);
+        });
+    }
+
+    // Check if a filename has a valid extension
+    function hasValidExtension(fileName) {
+        // Common file extensions to include
+        const validExtensions = [
+            '.mp3', '.mp4', '.avi', '.mkv', '.zip', '.rar', '.7z',
+            '.pdf', '.doc', '.docx', '.txt', '.jpg', '.jpeg', '.png',
+            '.gif', '.wav', '.flac', '.m4a', '.mov', '.wmv', '.epub',
+            '.mobi', '.azw3', '.m4v', '.webm', '.flv', '.ogg'
+        ];
+        return validExtensions.some(ext => fileName.toLowerCase().endsWith(ext));
+    }
+
+    // Handle file upload and search
+    function handleFileUpload(event) {
+        const files = event.target.files;
+        const displayTextarea = document.getElementById('display-textarea');
+        const hiddenTextarea = document.getElementById('hidden-textarea');
+        const counter = document.getElementById('results-counter');
+        let allResults = [];
+        let totalLinks = 0;
+
+        displayTextarea.value = ''; // Clear previous results
+        hiddenTextarea.value = ''; // Clear hidden textarea
+
+        for (const file of files) {
+            const fileName = file.name;
+            const results = findSimilarFiles(fileName);
+            if (results.length > 0) {
+                results.forEach(result => {
+                    allResults.push(result.directLink);
+                });
+                totalLinks += results.length;
+            }
+        }
+
+        // Update counter
+        counter.textContent = `Total links found: ${totalLinks}`;
+
+        // Update display textarea with numbers
+        displayTextarea.value = allResults
+            .map((link, index) => `${(index + 1).toString().padStart(3, '0')}. ${link}`)
+            .join('\n');
+
+        // Update hidden textarea without numbers
+        hiddenTextarea.value = allResults.join('\n');
+    }
+
+    // Find similar files in the current page
+    function findSimilarFiles(fileName) {
+        const results = [];
+        const links = document.querySelectorAll('a');
+        const searchTerm = fileName.toLowerCase();
+        const collection = window.location.pathname.split('/')[2];
+
+        links.forEach(link => {
+            const text = link.textContent.toLowerCase();
+            if (text.includes(searchTerm) && hasValidExtension(text)) {
+                results.push({
+                    fileName: link.textContent,
+                    directLink: `https://archive.org/download/${collection}/${encodeURIComponent(link.textContent)}`
+                });
+            }
+        });
+
+        return results;
+    }
+
+    // Scrape all links from the page
+    function scrapeAllLinks(excludeTerms = []) {
+        const displayTextarea = document.getElementById('display-textarea');
+        const hiddenTextarea = document.getElementById('hidden-textarea');
+        const counter = document.getElementById('results-counter');
+        const links = document.querySelectorAll('a');
+        const collection = window.location.pathname.split('/')[2];
+        let allLinks = [];
+
+        links.forEach(link => {
+            const fileName = link.textContent;
+            const lowerFileName = fileName.toLowerCase();
+
+            // Skip if the file name contains any excluded terms or doesn't have a valid extension
+            const shouldExclude = excludeTerms.some(term => lowerFileName.includes(term));
+            if (!shouldExclude && fileName.trim() !== '' && hasValidExtension(fileName)) {
+                allLinks.push(`https://archive.org/download/${collection}/${encodeURIComponent(fileName)}`);
+            }
+        });
+
+        // Update counter
+        counter.textContent = `Total links found: ${allLinks.length}`;
+
+        // Update display textarea with numbers
+        displayTextarea.value = allLinks
+            .map((link, index) => `${(index + 1).toString().padStart(3, '0')}. ${link}`)
+            .join('\n');
+
+        // Update hidden textarea without numbers
+        hiddenTextarea.value = allLinks.join('\n');
+    }
+
+    // Initialize
+    createUploadInterface();
+
+    // Add drag and drop support
+    document.addEventListener('dragover', (e) => {
+        e.preventDefault();
+    });
+
+    document.addEventListener('drop', (e) => {
+        e.preventDefault();
+        const files = e.dataTransfer.files;
+        if (files.length > 0) {
+            document.querySelector('input[type="file"]').files = files;
+            document.querySelector('input[type="file"]').dispatchEvent(new Event('change'));
+        }
+    });
+})();
