@@ -1,0 +1,158 @@
+// ==UserScript==
+// @name         Archive.org Bulk Search Helper
+// @namespace    http://tampermonkey.net/
+// @version      0.3
+// @description  Bulk search files on archive.org with direct links
+// @author       You
+// @match        https://archive.org/download/ravana-*
+// @grant        none
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    // Create upload interface
+    function createUploadInterface() {
+        const container = document.createElement('div');
+        container.style.cssText = `
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 20px;
+            background: white;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+            z-index: 9999;
+            width: 600px;
+            max-height: 80vh;
+            overflow-y: auto;
+        `;
+
+        // Create file input
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.multiple = true;
+        input.style.marginBottom = '10px';
+        input.style.display = 'block';
+
+        // Create results counter
+        const counter = document.createElement('div');
+        counter.id = 'results-counter';
+        counter.style.cssText = `
+            margin: 10px 0;
+            font-weight: bold;
+            color: #444;
+        `;
+
+        // Create results textarea
+        const textarea = document.createElement('textarea');
+        textarea.id = 'results-textarea';
+        textarea.style.cssText = `
+            width: 100%;
+            height: 300px;
+            margin-top: 10px;
+            padding: 10px;
+            font-family: monospace;
+            resize: vertical;
+        `;
+        textarea.placeholder = 'Search results will appear here...';
+
+        // Create copy button
+        const copyButton = document.createElement('button');
+        copyButton.textContent = 'Copy All Links';
+        copyButton.style.cssText = `
+            margin-top: 10px;
+            padding: 5px 10px;
+            background: #0066cc;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+        `;
+        copyButton.onclick = () => {
+            textarea.select();
+            document.execCommand('copy');
+            const originalText = copyButton.textContent;
+            copyButton.textContent = 'Copied!';
+            setTimeout(() => {
+                copyButton.textContent = originalText;
+            }, 2000);
+        };
+
+        // Add elements to container
+        container.appendChild(input);
+        container.appendChild(counter);
+        container.appendChild(textarea);
+        container.appendChild(copyButton);
+        document.body.appendChild(container);
+
+        input.addEventListener('change', handleFileUpload);
+    }
+
+    // Handle file upload and search
+    function handleFileUpload(event) {
+        const files = event.target.files;
+        const textarea = document.getElementById('results-textarea');
+        const counter = document.getElementById('results-counter');
+        let allResults = [];
+        let totalLinks = 0;
+
+        textarea.value = ''; // Clear previous results
+
+        for (const file of files) {
+            const fileName = file.name;
+            const results = findSimilarFiles(fileName);
+            if (results.length > 0) {
+                results.forEach(result => {
+                    allResults.push(result.directLink);
+                });
+                totalLinks += results.length;
+            }
+        }
+
+        // Update counter
+        counter.textContent = `Total links found: ${totalLinks}`;
+
+        // Update textarea
+        textarea.value = allResults.join('\n');
+    }
+
+    // Find similar files in the current page
+    function findSimilarFiles(fileName) {
+        const results = [];
+        const links = document.querySelectorAll('a');
+        const searchTerm = fileName.toLowerCase();
+        const collection = window.location.pathname.split('/')[2];
+
+        links.forEach(link => {
+            const text = link.textContent.toLowerCase();
+
+            if (text.includes(searchTerm.toLowerCase())) {
+                results.push({
+                    fileName: link.textContent,
+                    directLink: `https://archive.org/download/${collection}/${encodeURIComponent(link.textContent)}`
+                });
+            }
+        });
+
+        return results;
+    }
+
+    // Initialize
+    createUploadInterface();
+
+    // Add drag and drop support
+    document.addEventListener('dragover', (e) => {
+        e.preventDefault();
+    });
+
+    document.addEventListener('drop', (e) => {
+        e.preventDefault();
+        const files = e.dataTransfer.files;
+        if (files.length > 0) {
+            document.querySelector('input[type="file"]').files = files;
+            document.querySelector('input[type="file"]').dispatchEvent(new Event('change'));
+        }
+    });
+})();
